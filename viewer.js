@@ -5,15 +5,31 @@ let currentLogContent = null;
 let isConnected = false;
 
 // Check connection on load
-chrome.storage.local.get(['isConnected', 'instanceUrl'], (result) => {
+chrome.storage.local.get(['isConnected', 'instanceUrl', 'errorMessage'], (result) => {
   isConnected = result.isConnected || false;
   
-  if (!isConnected) {
+  if (result.errorMessage) {
+    showStatus(result.errorMessage, 'error');
+  } else if (!isConnected) {
     showStatus('Please open this extension from a Salesforce page', 'error');
   } else {
     showStatus(`Connected to ${result.instanceUrl}`, 'success');
+    // Test la connexion au content script
+    testConnection();
   }
 });
+
+// Teste la connexion avec le content script
+async function testConnection() {
+  try {
+    console.log('Testing connection to Salesforce tab...');
+    const response = await callSalesforceAPI('getSessionInfo');
+    console.log('Connection test successful:', response);
+  } catch (error) {
+    console.error('Connection test failed:', error);
+    showStatus(`Connection error: ${error.message}`, 'error');
+  }
+}
 
 // Helper function to call Salesforce API through content script
 async function callSalesforceAPI(action, payload = {}) {

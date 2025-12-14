@@ -1,10 +1,18 @@
 // content.js - Version corrigée pour éviter "port closed"
 
-// Stocke l'URL de l'instance au chargement
-chrome.storage.local.set({
-  instanceUrl: window.location.origin,
-  isConnected: true
-});
+// Évite l'injection multiple
+if (window.salesforceLogViewerInjected) {
+  console.log('[SF Log Viewer] Already injected, skipping');
+} else {
+  window.salesforceLogViewerInjected = true;
+  console.log('[SF Log Viewer] Content script loaded');
+  
+  // Stocke l'URL de l'instance au chargement
+  chrome.storage.local.set({
+    instanceUrl: window.location.origin,
+    isConnected: true
+  });
+}
 
 // Écoute les messages de manière synchrone
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
