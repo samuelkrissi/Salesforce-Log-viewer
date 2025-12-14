@@ -1,109 +1,121 @@
-(function() {
-  const script = document.createElement('script');
-  debugger
-  script.textContent = `
-    (function() {
-      const sessionStorageToken = window.sessionStorage.getItem('inst');
-      const cookieToken = getCookie('sid');
-      const chosenToken = sessionStorageToken || cookieToken;
-      console.log('[Salesforce Log Viewer] sessionStorage inst:', sessionStorageToken);
-      console.log('[Salesforce Log Viewer] cookie sid:', cookieToken);
-      console.log('[Salesforce Log Viewer] token envoyé:', chosenToken);
-      window.postMessage({
-        type: 'SF_ACCESS_TOKEN',
-        sessionId: chosenToken,
-        instanceUrl: window.location.origin
-      }, '*');
-      function getCookie(name) {
-        const value = '; ' + document.cookie;
-        const parts = value.split('; ' + name + '=');
-        if (parts.length === 2) return parts.pop().split(';').shift();
-        return null;
-      }
-    })();
-  `;
-  document.documentElement.appendChild(script);
-  script.remove();
-})();
+// content.js - Handles all API calls using the session cookie
 
-(function() {
-  // Récupère le cookie sid directement depuis le content script
-  function getCookie(name) {
-    const value = '; ' + document.cookie;
-    const parts = value.split('; ' + name + '=');
-    if (parts.length === 2) return parts.pop().split(';').shift();
-    return null;
-  }
-  const sid = getCookie('sid');
-  if (sid) {
-    chrome.storage.local.set({
-      accessToken: sid,
-      instanceUrl: window.location.origin
-    });
-    console.log('[Salesforce Log Viewer] sid trouvé et stocké:', sid);
-  } else {
-    console.log('[Salesforce Log Viewer] sid non trouvé dans les cookies.');
-  }
-  // Demande le sid du cookie lightning.force.com au background script
-  function requestLightningSid() {
-    chrome.runtime.sendMessage({ action: 'getLightningSid' }, (response) => {
-      if (response && response.sid) {
-        chrome.storage.local.set({
-          accessToken: response.sid,
-          instanceUrl: window.location.origin
-        });
-        console.log('[Salesforce Log Viewer] sid lightning.force.com trouvé et stocké:', response.sid);
-      } else {
-        console.log('[Salesforce Log Viewer] sid lightning.force.com non trouvé.');
-      }
-    });
-  }
-  // Appel automatique à l'ouverture du content script
-  requestLightningSid();
-})();
-
-window.addEventListener('message', (event) => {
-  if (event.source !== window) return;
-  if (event.data.type === 'SF_ACCESS_TOKEN') {
-    chrome.storage.local.set({
-      accessToken: event.data.sessionId,
-      instanceUrl: event.data.instanceUrl
-    });
-  }
+// Store instance URL for later use
+chrome.storage.local.set({
+  instanceUrl: window.location.origin,
+  isConnected: true
 });
 
+// Listen for API call requests from viewer
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  if (request.action === 'getToken') {
-    chrome.storage.local.get(['accessToken', 'instanceUrl'], (result) => {
-      sendResponse(result);
+  
+  // Get session info
+  if (request.action === 'getSessionInfo') {
+    sendResponse({
+      instanceUrl: window.location.origin,
+      isConnected: true
     });
     return true;
   }
-  // Ajoute la gestion de la récupération des logs côté content script
+  
+  // Fetch logs
   if (request.action === 'fetchLogs') {
     fetch('/services/data/v65.0/tooling/query/?q=SELECT+Id,LogUserId,LogUser.Name,Operation,Request,StartTime,Status,DurationMilliseconds+FROM+ApexLog+ORDER+BY+StartTime+DESC+LIMIT+200', {
-      credentials: 'include'
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json'
+      }
     })
       .then(response => {
-        if (response.status === 401 || response.status === 403 || response.status === 302) {
-          // Token non utilisable pour l'API REST
-          sendResponse({success: false, error: 'token_invalid'});
-          return null;
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
         }
         return response.json();
       })
       .then(data => {
-        if (data && data.records) {
-          sendResponse({success: true, logs: data.records});
-        } else if (!data) {
-          // Erreur déjà gérée
-        } else {
-          sendResponse({success: false});
-        }
+        sendResponse({ success: true, data: data });
       })
-      .catch(() => {
-        sendResponse({success: false});
+      .catch(error => {
+        sendResponse({ success: false, error: error.message });
       });
+    return true; // Keep channel open for async response
+  }
+  
+  // Fetch log body
+  if (request.action === 'fetchLogBody') {
+    fetch(`/services/data/v65.0/tooling/sobjects/ApexLog/${request.logId}/Body`, {
+      credentials: 'include'
+    })
+      .then(response => {
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+        return response.text();
+      })
+      .then(text => {
+        sendResponse({ success: true, data: text });
+      })
+      .catch(error => {
+        sendResponse({ success: false, error: error.message });
+      });
+    return true;
+  }
+  
+  // Delete log
+  if (request.action === 'deleteLog') {
+    fetch(`/services/data/v65.0/tooling/sobjects/ApexLog/${request.logId}`, {
+      method: 'DELETE',
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json'
+      }
+    })
+      .then(response => {
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+        sendResponse({ success: true });
+      })
+      .catch(error => {
+        sendResponse({ success: false, error: error.message });
+      });
+    return true;
+  }
+  
+  // Delete multiple logs
+  if (request.action === 'deleteLogs') {
+    const logIds = request.logIds;
+    const results = [];
+    
+    // Delete logs sequentially
+    (async () => {
+      for (const logId of logIds) {
+        try {
+          const response = await fetch(`/services/data/v65.0/tooling/sobjects/ApexLog/${logId}`, {
+            method: 'DELETE',
+            credentials: 'include',
+            headers: {
+              'Content-Type': 'application/json'
+            }
+          });
+          
+          results.push({
+            logId: logId,
+            success: response.ok,
+            status: response.status
+          });
+        } catch (error) {
+          results.push({
+            logId: logId,
+            success: false,
+            error: error.message
+          });
+        }
+      }
+      
+      sendResponse({ success: true, results: results });
+    })();
+    
     return true;
   }
 });

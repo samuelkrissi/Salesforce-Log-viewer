@@ -1,19 +1,37 @@
-let accessToken = null;
-let instanceUrl = null;
 let allLogs = [];
 let selectedLogs = new Set();
 let currentLogId = null;
 let currentLogContent = null;
+let isConnected = false;
 
-// Get credentials on load
-chrome.storage.local.get(['accessToken', 'instanceUrl'], (result) => {
-  accessToken = result.accessToken;
-  instanceUrl = result.instanceUrl;
+// Check connection on load
+chrome.storage.local.get(['isConnected', 'instanceUrl'], (result) => {
+  isConnected = result.isConnected || false;
   
-  if (!accessToken) {
-    showStatus('Token not found. Open this extension from a Salesforce page.', 'error');
+  if (!isConnected) {
+    showStatus('Please open this extension from a Salesforce page', 'error');
+  } else {
+    showStatus(`Connected to ${result.instanceUrl}`, 'success');
   }
 });
+
+// Helper function to call Salesforce API through content script
+async function callSalesforceAPI(action, payload = {}) {
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage({
+      action: 'proxyToSalesforce',
+      payload: { action, ...payload }
+    }, (response) => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(chrome.runtime.lastError.message));
+      } else if (!response.success) {
+        reject(new Error(response.error || 'Unknown error'));
+      } else {
+        resolve(response);
+      }
+    });
+  });
+}
 
 // Event listeners
 document.getElementById('fetchLogs').addEventListener('click', fetchLogs);
@@ -43,39 +61,17 @@ async function fetchLogs() {
   const logBody = document.getElementById('logBody');
   logBody.innerHTML = '<tr><td colspan="7" class="loading"><div class="spinner"></div>Loading logs...</td></tr>';
 
-  // Récupère le token et l'instanceUrl depuis le storage
-  chrome.storage.local.get(['accessToken', 'instanceUrl'], async (result) => {
-    const accessToken = result.accessToken;
-    const instanceUrl = result.instanceUrl;
-    if (!accessToken || !instanceUrl) {
-      showStatus('Token ou instanceUrl manquant.', 'error');
-      logBody.innerHTML = '<tr><td colspan="7" style="text-align: center; color: red; padding: 40px;">Token or instanceUrl missing</td></tr>';
-      return;
-    }
-    try {
-      const response = await fetch(
-        `${instanceUrl}/services/data/v65.0/tooling/query/?q=SELECT+Id,LogUserId,LogUser.Name,Operation,Request,StartTime,Status,DurationMilliseconds+FROM+ApexLog+ORDER+BY+StartTime+DESC+LIMIT+200`,
-        {
-          headers: {
-            'Authorization': `Bearer ${accessToken}`,
-            'Content-Type': 'application/json'
-          }
-        }
-      );
-      if (!response.ok) {
-        throw new Error(`API Error: ${response.status}`);
-      }
-      const data = await response.json();
-      allLogs = data.records;
-      updateUserFilter();
-      displayLogs(allLogs);
-      updateStats();
-      showStatus(`${allLogs.length} logs retrieved successfully`, 'success');
-    } catch (error) {
-      showStatus(`Error: ${error.message}`, 'error');
-      logBody.innerHTML = '<tr><td colspan="7" style="text-align: center; color: red; padding: 40px;">Error loading logs</td></tr>';
-    }
-  });
+  try {
+    const response = await callSalesforceAPI('fetchLogs');
+    allLogs = response.data.records;
+    updateUserFilter();
+    displayLogs(allLogs);
+    updateStats();
+    showStatus(`${allLogs.length} logs retrieved successfully`, 'success');
+  } catch (error) {
+    showStatus(`Error: ${error.message}`, 'error');
+    logBody.innerHTML = `<tr><td colspan="7" style="text-align: center; color: red; padding: 40px;">Error: ${error.message}</td></tr>`;
+  }
 }
 
 function updateUserFilter() {
@@ -136,165 +132,109 @@ async function previewLog(logId) {
   modal.style.display = 'block';
   document.getElementById('logContent').textContent = 'Loading log content...';
 
-  // Récupère le token et l'instanceUrl depuis le storage
-  chrome.storage.local.get(['accessToken', 'instanceUrl'], async (result) => {
-    const accessToken = result.accessToken;
-    const instanceUrl = result.instanceUrl;
-    if (!accessToken || !instanceUrl) {
-      document.getElementById('logContent').textContent = 'Token or instanceUrl missing.';
-      return;
-    }
-    try {
-      const response = await fetch(
-        `${instanceUrl}/services/data/v65.0/tooling/sobjects/ApexLog/${logId}/Body`,
-        {
-          headers: {
-            'Authorization': `Bearer ${accessToken}`
-          }
-        }
-      );
-      if (!response.ok) {
-        throw new Error(`Failed to fetch log: ${response.status}`);
-      }
-      const logText = await response.text();
-      currentLogContent = logText;
-      const logInfo = allLogs.find(log => log.Id === logId);
-      document.getElementById('logDetails').innerHTML = `
-        <div style="margin-bottom: 15px; padding: 15px; background: #f8f9fb; border-radius: 4px;">
-          <p><strong>User:</strong> ${logInfo?.LogUser?.Name || 'N/A'}</p>
-          <p><strong>Operation:</strong> ${logInfo?.Operation || logInfo?.Request || 'N/A'}</p>
-          <p><strong>Date:</strong> ${formatDateTime(logInfo?.StartTime)}</p>
-          <p><strong>Status:</strong> ${logInfo?.Status || 'N/A'}</p>
-        </div>
-      `;
-      document.getElementById('logContent').textContent = logText;
-    } catch (error) {
-      document.getElementById('logContent').textContent = `Error loading log: ${error.message}`;
-    }
-  });
+  try {
+    const response = await callSalesforceAPI('fetchLogBody', { logId });
+    currentLogContent = response.data;
+    
+    const logInfo = allLogs.find(log => log.Id === logId);
+    document.getElementById('logDetails').innerHTML = `
+      <div style="margin-bottom: 15px; padding: 15px; background: #f8f9fb; border-radius: 4px;">
+        <p><strong>User:</strong> ${logInfo?.LogUser?.Name || 'N/A'}</p>
+        <p><strong>Operation:</strong> ${logInfo?.Operation || logInfo?.Request || 'N/A'}</p>
+        <p><strong>Date:</strong> ${formatDateTime(logInfo?.StartTime)}</p>
+        <p><strong>Status:</strong> ${logInfo?.Status || 'N/A'}</p>
+      </div>
+    `;
+    document.getElementById('logContent').textContent = currentLogContent;
+  } catch (error) {
+    document.getElementById('logContent').textContent = `Error loading log: ${error.message}`;
+  }
 }
 
-function downloadLog(logId, content = null) {
+async function downloadLog(logId, content = null) {
   if (!content) {
-    // Récupère le token et l'instanceUrl depuis le storage
-    chrome.storage.local.get(['accessToken', 'instanceUrl'], async (result) => {
-      const accessToken = result.accessToken;
-      const instanceUrl = result.instanceUrl;
-      if (!accessToken || !instanceUrl) {
-        showStatus('Token ou instanceUrl manquant.', 'error');
-        return;
-      }
-      try {
-        const response = await fetch(
-          `${instanceUrl}/services/data/v65.0/tooling/sobjects/ApexLog/${logId}/Body`,
-          {
-            headers: {
-              'Authorization': `Bearer ${accessToken}`
-            }
-          }
-        );
-        const text = await response.text();
-        performDownload(logId, text);
-      } catch (error) {
-        showStatus(`Error downloading log: ${error.message}`, 'error');
-      }
-    });
+    try {
+      const response = await callSalesforceAPI('fetchLogBody', { logId });
+      performDownload(logId, response.data);
+    } catch (error) {
+      showStatus(`Error downloading log: ${error.message}`, 'error');
+    }
   } else {
     performDownload(logId, content);
   }
+}
+
+function performDownload(logId, content) {
+  const blob = new Blob([content], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `apex-log-${logId}.log`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 async function deleteSingleLog(logId) {
   if (!confirm('Are you sure you want to delete this log?')) {
     return;
   }
-  // Récupère le token et l'instanceUrl depuis le storage
-  chrome.storage.local.get(['accessToken', 'instanceUrl'], async (result) => {
-    const accessToken = result.accessToken;
-    const instanceUrl = result.instanceUrl;
-    if (!accessToken || !instanceUrl) {
-      showStatus('Token ou instanceUrl manquant.', 'error');
-      return;
-    }
-    try {
-      const response = await fetch(
-        `${instanceUrl}/services/data/v65.0/tooling/sobjects/ApexLog/${logId}`,
-        {
-          method: 'DELETE',
-          headers: {
-            'Authorization': `Bearer ${accessToken}`,
-            'Content-Type': 'application/json'
-          }
-        }
-      );
-      if (response.ok) {
-        allLogs = allLogs.filter(log => log.Id !== logId);
-        document.querySelector(`tr[data-log-id="${logId}"]`)?.remove();
-        updateStats();
-        showStatus('Log deleted successfully', 'success');
-      } else {
-        throw new Error(`Delete failed: ${response.status}`);
-      }
-    } catch (error) {
-      showStatus(`Error deleting log: ${error.message}`, 'error');
-    }
-  });
+
+  try {
+    await callSalesforceAPI('deleteLog', { logId });
+    allLogs = allLogs.filter(log => log.Id !== logId);
+    document.querySelector(`tr[data-log-id="${logId}"]`)?.remove();
+    updateStats();
+    showStatus('Log deleted successfully', 'success');
+  } catch (error) {
+    showStatus(`Error deleting log: ${error.message}`, 'error');
+  }
 }
 
 async function deleteSelected() {
   if (selectedLogs.size === 0) return;
+  
   if (!confirm(`Are you sure you want to delete ${selectedLogs.size} log(s)?`)) {
     return;
   }
+  
   const deleteBtn = document.getElementById('deleteSelected');
   deleteBtn.disabled = true;
   deleteBtn.textContent = '⏳ Deleting...';
-  let deleted = 0;
-  let errors = 0;
-  // Récupère le token et l'instanceUrl depuis le storage
-  chrome.storage.local.get(['accessToken', 'instanceUrl'], async (result) => {
-    const accessToken = result.accessToken;
-    const instanceUrl = result.instanceUrl;
-    if (!accessToken || !instanceUrl) {
-      showStatus('Token ou instanceUrl manquant.', 'error');
-      deleteBtn.disabled = false;
-      deleteBtn.textContent = '🗑️ Delete Selected';
-      return;
-    }
-    for (const logId of selectedLogs) {
-      try {
-        const response = await fetch(
-          `${instanceUrl}/services/data/v65.0/tooling/sobjects/ApexLog/${logId}`,
-          {
-            method: 'DELETE',
-            headers: {
-              'Authorization': `Bearer ${accessToken}`,
-              'Content-Type': 'application/json'
-            }
-          }
-        );
-        if (response.ok) {
-          deleted++;
-          allLogs = allLogs.filter(log => log.Id !== logId);
-          document.querySelector(`tr[data-log-id="${logId}"]`)?.remove();
-        } else {
-          errors++;
-        }
-      } catch (error) {
-        errors++;
+  
+  try {
+    const response = await callSalesforceAPI('deleteLogs', { 
+      logIds: Array.from(selectedLogs) 
+    });
+    
+    const results = response.results;
+    const deleted = results.filter(r => r.success).length;
+    const errors = results.filter(r => !r.success).length;
+    
+    // Remove deleted logs from display
+    results.forEach(result => {
+      if (result.success) {
+        allLogs = allLogs.filter(log => log.Id !== result.logId);
+        document.querySelector(`tr[data-log-id="${result.logId}"]`)?.remove();
       }
-    }
+    });
+    
     selectedLogs.clear();
     updateSelectedCount();
     updateStats();
-    deleteBtn.disabled = false;
-    deleteBtn.textContent = '🗑️ Delete Selected';
+    
     if (errors > 0) {
       showStatus(`${deleted} log(s) deleted, ${errors} error(s)`, 'error');
     } else {
       showStatus(`${deleted} log(s) deleted successfully`, 'success');
     }
-  });
+  } catch (error) {
+    showStatus(`Error deleting logs: ${error.message}`, 'error');
+  } finally {
+    deleteBtn.disabled = false;
+    deleteBtn.textContent = '🗑️ Delete Selected';
+  }
 }
 
 function handleCheckboxChange(e) {
@@ -343,59 +283,6 @@ function updateSelectedCount() {
   } else {
     countSpan.style.display = 'none';
     deleteBtn.disabled = true;
-  }
-}
-
-async function deleteSelected() {
-  if (selectedLogs.size === 0) return;
-  
-  if (!confirm(`Are you sure you want to delete ${selectedLogs.size} log(s)?`)) {
-    return;
-  }
-  
-  const deleteBtn = document.getElementById('deleteSelected');
-  deleteBtn.disabled = true;
-  deleteBtn.textContent = '⏳ Deleting...';
-  
-  let deleted = 0;
-  let errors = 0;
-  
-  for (const logId of selectedLogs) {
-    try {
-      const response = await fetch(
-        `${instanceUrl}/services/data/v65.0/tooling/sobjects/ApexLog/${logId}`,
-        {
-          method: 'DELETE',
-          headers: {
-            'Authorization': `Bearer ${accessToken}`,
-            'Content-Type': 'application/json'
-          }
-        }
-      );
-      
-      if (response.ok) {
-        deleted++;
-        allLogs = allLogs.filter(log => log.Id !== logId);
-        document.querySelector(`tr[data-log-id="${logId}"]`)?.remove();
-      } else {
-        errors++;
-      }
-    } catch (error) {
-      errors++;
-    }
-  }
-  
-  selectedLogs.clear();
-  updateSelectedCount();
-  updateStats();
-  
-  deleteBtn.disabled = false;
-  deleteBtn.textContent = '🗑️ Delete Selected';
-  
-  if (errors > 0) {
-    showStatus(`${deleted} log(s) deleted, ${errors} error(s)`, 'error');
-  } else {
-    showStatus(`${deleted} log(s) deleted successfully`, 'success');
   }
 }
 
