@@ -20,3 +20,30 @@ chrome.action.onClicked.addListener((tab) => {
     });
   }
 });
+
+// Listener pour récupérer le cookie sid du domaine lightning.force.com
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  if (request.action === 'getLightningSid') {
+    // Utilise le bon sous-domaine pour le cookie sid
+    let lightningUrl = 'https://*.lightning.force.com/*';
+    if (sender && sender.tab && sender.tab.url) {
+      try {
+        const urlObj = new URL(sender.tab.url);
+        if (urlObj.hostname.endsWith('.lightning.force.com')) {
+          lightningUrl = urlObj.origin;
+        }
+      } catch {}
+    }
+    chrome.cookies.get({
+      url: lightningUrl,
+      name: 'sid'
+    }, (cookie) => {
+      if (cookie && cookie.value) {
+        sendResponse({ sid: cookie.value });
+      } else {
+        sendResponse({ sid: null });
+      }
+    });
+    return true; // async response
+  }
+});

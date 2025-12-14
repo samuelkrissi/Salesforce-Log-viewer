@@ -1,5 +1,6 @@
 (function() {
   const script = document.createElement('script');
+  debugger
   script.textContent = `
     (function() {
       const sessionStorageToken = window.sessionStorage.getItem('inst');
@@ -43,6 +44,22 @@
   } else {
     console.log('[Salesforce Log Viewer] sid non trouvé dans les cookies.');
   }
+  // Demande le sid du cookie lightning.force.com au background script
+  function requestLightningSid() {
+    chrome.runtime.sendMessage({ action: 'getLightningSid' }, (response) => {
+      if (response && response.sid) {
+        chrome.storage.local.set({
+          accessToken: response.sid,
+          instanceUrl: window.location.origin
+        });
+        console.log('[Salesforce Log Viewer] sid lightning.force.com trouvé et stocké:', response.sid);
+      } else {
+        console.log('[Salesforce Log Viewer] sid lightning.force.com non trouvé.');
+      }
+    });
+  }
+  // Appel automatique à l'ouverture du content script
+  requestLightningSid();
 })();
 
 window.addEventListener('message', (event) => {
