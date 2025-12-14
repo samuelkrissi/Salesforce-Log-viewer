@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "Salesforce Log Viewer",
+  "version": "2.0",
+  "description": "View and manage Salesforce debug logs",
+  "permissions": [
+    "activeTab",
+    "storage",
+    "scripting",
+    "cookies"
+  ],
+  "host_permissions": [
+    "https://*.salesforce.com/*",
+    "https://*.force.com/*",
+    "https://*.lightning.force.com/*"
+  ],
+  "action": {
+    "default_icon": {
+      "16": "icon16.png",
+      "48": "icon48.png",
+      "128": "icon128.png"
+    }
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://*.salesforce.com/*", "https://*.force.com/*"],
+      "js": ["content.js"]
+    }
+  ]
+}
