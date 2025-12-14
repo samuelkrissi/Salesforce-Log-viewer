@@ -24,7 +24,13 @@ async function testConnection() {
   try {
     console.log('Testing connection to Salesforce tab...');
     const response = await callSalesforceAPI('getSessionInfo');
-    console.log('Connection test successful:', response);
+    console.log('Connection test response:', response);
+    
+    if (!response.hasSession) {
+      showStatus('⚠️ Warning: Session ID not found. Some features may not work. Try refreshing the Salesforce page.', 'error');
+    } else {
+      console.log('Connection test successful - session found');
+    }
   } catch (error) {
     console.error('Connection test failed:', error);
     showStatus(`Connection error: ${error.message}`, 'error');
@@ -78,15 +84,33 @@ async function fetchLogs() {
   logBody.innerHTML = '<tr><td colspan="7" class="loading"><div class="spinner"></div>Loading logs...</td></tr>';
 
   try {
+    console.log('Fetching logs...');
     const response = await callSalesforceAPI('fetchLogs');
+    console.log('Logs response:', response);
+    
+    if (!response.data || !response.data.records) {
+      throw new Error('Invalid response format from API');
+    }
+    
     allLogs = response.data.records;
     updateUserFilter();
     displayLogs(allLogs);
     updateStats();
-    showStatus(`${allLogs.length} logs retrieved successfully`, 'success');
+    showStatus(`✅ ${allLogs.length} logs retrieved successfully`, 'success');
   } catch (error) {
-    showStatus(`Error: ${error.message}`, 'error');
-    logBody.innerHTML = `<tr><td colspan="7" style="text-align: center; color: red; padding: 40px;">Error: ${error.message}</td></tr>`;
+    console.error('Error fetching logs:', error);
+    
+    let errorMessage = error.message;
+    if (errorMessage.includes('not valid JSON')) {
+      errorMessage = 'Session expired or invalid. Please refresh the Salesforce page and try again.';
+    }
+    
+    showStatus(`❌ Error: ${errorMessage}`, 'error');
+    logBody.innerHTML = `<tr><td colspan="7" style="text-align: center; color: red; padding: 40px;">
+      <strong>Error loading logs</strong><br><br>
+      ${errorMessage}<br><br>
+      <button onclick="location.reload()">Retry</button>
+    </td></tr>`;
   }
 }
 
