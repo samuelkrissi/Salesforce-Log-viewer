@@ -1,12 +1,12 @@
-// content.js - Handles all API calls using the session cookie
+// content.js - Version corrigée pour éviter "port closed"
 
-// Store instance URL for later use
+// Stocke l'URL de l'instance au chargement
 chrome.storage.local.set({
   instanceUrl: window.location.origin,
   isConnected: true
 });
 
-// Listen for API call requests from viewer
+// Écoute les messages de manière synchrone
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   
   // Get session info
@@ -15,107 +15,122 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       instanceUrl: window.location.origin,
       isConnected: true
     });
-    return true;
+    return false; // Réponse synchrone
   }
   
   // Fetch logs
   if (request.action === 'fetchLogs') {
-    fetch('/services/data/v65.0/tooling/query/?q=SELECT+Id,LogUserId,LogUser.Name,Operation,Request,StartTime,Status,DurationMilliseconds+FROM+ApexLog+ORDER+BY+StartTime+DESC+LIMIT+200', {
-      credentials: 'include',
-      headers: {
-        'Content-Type': 'application/json'
-      }
-    })
-      .then(response => {
+    (async () => {
+      try {
+        const response = await fetch('/services/data/v65.0/tooling/query/?q=SELECT+Id,LogUserId,LogUser.Name,Operation,Request,StartTime,Status,DurationMilliseconds+FROM+ApexLog+ORDER+BY+StartTime+DESC+LIMIT+200', {
+          credentials: 'include',
+          headers: {
+            'Content-Type': 'application/json'
+          }
+        });
+        
         if (!response.ok) {
           throw new Error(`HTTP ${response.status}`);
         }
-        return response.json();
-      })
-      .then(data => {
+        
+        const data = await response.json();
         sendResponse({ success: true, data: data });
-      })
-      .catch(error => {
+      } catch (error) {
         sendResponse({ success: false, error: error.message });
-      });
-    return true; // Keep channel open for async response
+      }
+    })();
+    
+    return true; // Garde le canal ouvert pour async
   }
   
   // Fetch log body
   if (request.action === 'fetchLogBody') {
-    fetch(`/services/data/v65.0/tooling/sobjects/ApexLog/${request.logId}/Body`, {
-      credentials: 'include'
-    })
-      .then(response => {
+    (async () => {
+      try {
+        const response = await fetch(`/services/data/v65.0/tooling/sobjects/ApexLog/${request.logId}/Body`, {
+          credentials: 'include'
+        });
+        
         if (!response.ok) {
           throw new Error(`HTTP ${response.status}`);
         }
-        return response.text();
-      })
-      .then(text => {
+        
+        const text = await response.text();
         sendResponse({ success: true, data: text });
-      })
-      .catch(error => {
+      } catch (error) {
         sendResponse({ success: false, error: error.message });
-      });
-    return true;
+      }
+    })();
+    
+    return true; // Garde le canal ouvert pour async
   }
   
   // Delete log
   if (request.action === 'deleteLog') {
-    fetch(`/services/data/v65.0/tooling/sobjects/ApexLog/${request.logId}`, {
-      method: 'DELETE',
-      credentials: 'include',
-      headers: {
-        'Content-Type': 'application/json'
-      }
-    })
-      .then(response => {
+    (async () => {
+      try {
+        const response = await fetch(`/services/data/v65.0/tooling/sobjects/ApexLog/${request.logId}`, {
+          method: 'DELETE',
+          credentials: 'include',
+          headers: {
+            'Content-Type': 'application/json'
+          }
+        });
+        
         if (!response.ok) {
           throw new Error(`HTTP ${response.status}`);
         }
+        
         sendResponse({ success: true });
-      })
-      .catch(error => {
+      } catch (error) {
         sendResponse({ success: false, error: error.message });
-      });
-    return true;
+      }
+    })();
+    
+    return true; // Garde le canal ouvert pour async
   }
   
   // Delete multiple logs
   if (request.action === 'deleteLogs') {
-    const logIds = request.logIds;
-    const results = [];
-    
-    // Delete logs sequentially
     (async () => {
-      for (const logId of logIds) {
-        try {
-          const response = await fetch(`/services/data/v65.0/tooling/sobjects/ApexLog/${logId}`, {
-            method: 'DELETE',
-            credentials: 'include',
-            headers: {
-              'Content-Type': 'application/json'
-            }
-          });
-          
-          results.push({
-            logId: logId,
-            success: response.ok,
-            status: response.status
-          });
-        } catch (error) {
-          results.push({
-            logId: logId,
-            success: false,
-            error: error.message
-          });
+      try {
+        const logIds = request.logIds;
+        const results = [];
+        
+        // Supprime les logs séquentiellement
+        for (const logId of logIds) {
+          try {
+            const response = await fetch(`/services/data/v65.0/tooling/sobjects/ApexLog/${logId}`, {
+              method: 'DELETE',
+              credentials: 'include',
+              headers: {
+                'Content-Type': 'application/json'
+              }
+            });
+            
+            results.push({
+              logId: logId,
+              success: response.ok,
+              status: response.status
+            });
+          } catch (error) {
+            results.push({
+              logId: logId,
+              success: false,
+              error: error.message
+            });
+          }
         }
+        
+        sendResponse({ success: true, results: results });
+      } catch (error) {
+        sendResponse({ success: false, error: error.message });
       }
-      
-      sendResponse({ success: true, results: results });
     })();
     
-    return true;
+    return true; // Garde le canal ouvert pour async
   }
+  
+  // Action inconnue
+  return false;
 });
