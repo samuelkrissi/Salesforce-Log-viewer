@@ -24,6 +24,7 @@ chrome.action.onClicked.addListener((tab) => {
 // Listener pour récupérer le cookie sid du domaine lightning.force.com
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'getLightningSid') {
+    alert('background.js received getLightningSid message');
     // Utilise le bon sous-domaine pour le cookie sid
     let lightningUrl = 'https://*.lightning.force.com/*';
     if (sender && sender.tab && sender.tab.url) {
